@@ -1,5 +1,7 @@
 import os
+import csv
 import logging
+from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from alerts.gmail_sender import send_signal_alert
@@ -17,20 +19,58 @@ app = Flask(__name__)
 REQUIRED_FIELDS = {"symbol", "action", "price", "secret"}
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
+LOG_DIR = "logs"
+LOG_FILE = os.path.join(LOG_DIR, "signals.csv")
+CSV_HEADERS = ["timestamp", "symbol", "action", "price", "status", "reason"]
+
+
+def ensure_log_file():
+    os.makedirs(LOG_DIR, exist_ok=True)
+    if not os.path.isfile(LOG_FILE):
+        with open(LOG_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(CSV_HEADERS)
+
+
+def log_signal(symbol: str, action: str, price, status: str, reason: str = ""):
+    ensure_log_file()
+    with open(LOG_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.utcnow().isoformat(),
+            symbol,
+            action,
+            price,
+            status,
+            reason,
+        ])
+
 
 def parse_signal(data: dict) -> dict | None:
     missing = REQUIRED_FIELDS - data.keys()
     if missing:
         logger.warning(f"Signal rejected — missing fields: {missing}")
+        log_signal(
+            data.get("symbol", ""), data.get("action", ""), data.get("price", ""),
+            "rejected", f"missing fields: {missing}"
+        )
         return None
 
     if data["secret"] != WEBHOOK_SECRET:
         logger.warning("Signal rejected — invalid secret")
+        log_signal(
+            data.get("symbol", ""), data.get("action", ""), data.get("price", ""),
+            "rejected", "invalid secret"
+        )
         return None
 
     action = data["action"].upper()
     if action not in ("BUY", "SELL"):
         logger.warning(f"Signal rejected — unknown action: {data['action']}")
+        log_signal(
+            data.get("symbol", ""), action, data.get("price", ""),
+            "rejected", f"unknown action: {data['action']}"
+        )
         return None
 
     return {
@@ -59,6 +99,7 @@ def webhook():
         return jsonify({"status": "error", "message": "invalid signal"}), 400
 
     logger.info(f"Signal accepted: {signal}")
+    log_signal(signal["symbol"], signal["action"], signal["price"], "accepted")
 
     email_sent = send_signal_alert(signal)
     if not email_sent:
