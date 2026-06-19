@@ -1,6 +1,10 @@
+import os
 import logging
 from flask import Flask, request, jsonify
+from dotenv import load_dotenv
 from alerts.gmail_sender import send_signal_alert
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -10,13 +14,18 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-REQUIRED_FIELDS = {"symbol", "action", "price"}
+REQUIRED_FIELDS = {"symbol", "action", "price", "secret"}
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
 
 def parse_signal(data: dict) -> dict | None:
     missing = REQUIRED_FIELDS - data.keys()
     if missing:
         logger.warning(f"Signal rejected — missing fields: {missing}")
+        return None
+
+    if data["secret"] != WEBHOOK_SECRET:
+        logger.warning("Signal rejected — invalid secret")
         return None
 
     action = data["action"].upper()
@@ -33,13 +42,17 @@ def parse_signal(data: dict) -> dict | None:
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    if not WEBHOOK_SECRET:
+        logger.error("WEBHOOK_SECRET not set in .env — refusing all requests")
+        return jsonify({"status": "error", "message": "server misconfigured"}), 500
+
     data = request.get_json(silent=True)
 
     if not data:
         logger.warning("Received empty or non-JSON payload")
         return jsonify({"status": "error", "message": "invalid payload"}), 400
 
-    logger.info(f"Raw signal received: {data}")
+    logger.info(f"Raw signal received: { {k: v for k, v in data.items() if k != 'secret'} }")
 
     signal = parse_signal(data)
     if signal is None:
