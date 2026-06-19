@@ -1,5 +1,6 @@
 import logging
 from flask import Flask, request, jsonify
+from alerts.gmail_sender import send_signal_alert
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +46,11 @@ def webhook():
         return jsonify({"status": "error", "message": "invalid signal"}), 400
 
     logger.info(f"Signal accepted: {signal}")
+
+    email_sent = send_signal_alert(signal)
+    if not email_sent:
+        logger.warning("Signal processed but email notification failed")
+
     return jsonify({"status": "ok", "signal": signal}), 200
 
 
