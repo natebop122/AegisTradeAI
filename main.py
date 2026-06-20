@@ -1,10 +1,11 @@
 import os
 import csv
 import logging
+import traceback
 from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from alerts.gmail_sender import send_signal_alert
+from alerts.gmail_sender import send_signal_alert, send_error_alert
 
 load_dotenv()
 
@@ -82,30 +83,38 @@ def parse_signal(data: dict) -> dict | None:
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    if not WEBHOOK_SECRET:
-        logger.error("WEBHOOK_SECRET not set in .env — refusing all requests")
-        return jsonify({"status": "error", "message": "server misconfigured"}), 500
+    try:
+        if not WEBHOOK_SECRET:
+            logger.error("WEBHOOK_SECRET not set in .env — refusing all requests")
+            return jsonify({"status": "error", "message": "server misconfigured"}), 500
 
-    data = request.get_json(silent=True)
+        data = request.get_json(silent=True)
 
-    if not data:
-        logger.warning("Received empty or non-JSON payload")
-        return jsonify({"status": "error", "message": "invalid payload"}), 400
+        if not data:
+            logger.warning("Received empty or non-JSON payload")
+            return jsonify({"status": "error", "message": "invalid payload"}), 400
 
-    logger.info(f"Raw signal received: { {k: v for k, v in data.items() if k != 'secret'} }")
+        logger.info(f"Raw signal received: { {k: v for k, v in data.items() if k != 'secret'} }")
 
-    signal = parse_signal(data)
-    if signal is None:
-        return jsonify({"status": "error", "message": "invalid signal"}), 400
+        signal = parse_signal(data)
+        if signal is None:
+            return jsonify({"status": "error", "message": "invalid signal"}), 400
 
-    logger.info(f"Signal accepted: {signal}")
-    log_signal(signal["symbol"], signal["action"], signal["price"], "accepted")
+        logger.info(f"Signal accepted: {signal}")
+        log_signal(signal["symbol"], signal["action"], signal["price"], "accepted")
 
-    email_sent = send_signal_alert(signal)
-    if not email_sent:
-        logger.warning("Signal processed but email notification failed")
+        email_sent = send_signal_alert(signal)
+        if not email_sent:
+            logger.warning("Signal processed but email notification failed")
 
-    return jsonify({"status": "ok", "signal": signal}), 200
+        return jsonify({"status": "ok", "signal": signal}), 200
+
+    except Exception:
+        error_text = traceback.format_exc()
+        logger.error("Unhandled exception in webhook:")
+        logger.error(error_text)
+        send_error_alert(error_text, context="webhook endpoint")
+        return jsonify({"status": "error", "message": "internal server error"}), 500
 
 
 def main():
